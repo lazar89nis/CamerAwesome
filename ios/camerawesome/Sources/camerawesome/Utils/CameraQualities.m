@@ -13,7 +13,7 @@
 + (AVCaptureSessionPreset)selectVideoCapturePreset:(CGSize)size session:(AVCaptureSession *)session device:(AVCaptureDevice *)device {
   if (!CGSizeEqualToSize(CGSizeZero, size)) {
     AVCaptureSessionPreset bestPreset = [CameraQualities selectPresetForSize:size session:session];
-    if ([session canSetSessionPreset:bestPreset]) {
+    if (bestPreset != nil && [session canSetSessionPreset:bestPreset]) {
       return bestPreset;
     }
   }
@@ -45,11 +45,17 @@
 + (AVCaptureSessionPreset)computeBestPresetWithSession:(AVCaptureSession *)session device:(AVCaptureDevice *)device {
   NSArray *qualities = [CameraQualities captureFormatsForDevice:device];
   
+  /*for (PreviewSize *quality in qualities) {
+    CGSize qualitySize = CGSizeMake([quality.width floatValue], [quality.height floatValue]);
+    NSLog(@"🎯 Focus: qualitySize %@", NSStringFromCGSize(qualitySize));
+  }*/
+
   for (PreviewSize *quality in qualities) {
     CGSize qualitySize = CGSizeMake([quality.width floatValue], [quality.height floatValue]);
     AVCaptureSessionPreset currentPreset = [CameraQualities selectPresetForSize:qualitySize session:session];
     
-    if ([session canSetSessionPreset:currentPreset]) {
+    if (currentPreset != nil && [session canSetSessionPreset:currentPreset]) {
+      //NSLog(@"🎯 Focus: currentPreset %@", currentPreset);
       return currentPreset;
     }
   }
@@ -59,6 +65,7 @@
 }
 
 + (NSString *)selectPresetForSize:(CGSize)size session:(AVCaptureSession *)session {
+  //return AVCaptureSessionPreset1920x1080;
   if (size.width >= 2160 || size.height >= 3840) {
     if (@available(iOS 9.0, *)) {
       // we don't know the exact size, so we check if it can apply
@@ -81,8 +88,7 @@
   } else if (size.width == 288 && size.height == 352) {
     return AVCaptureSessionPreset352x288;
   } else {
-    // Default to HD
-    return AVCaptureSessionPreset1280x720;
+    return nil;
   }
 }
 
@@ -91,11 +97,39 @@
   NSArray<AVCaptureDeviceFormat *>* formats = [device formats];
   for(int i = 0; i < formats.count; i++) {
     AVCaptureDeviceFormat *format = formats[i];
+    /*NSMutableArray<NSString *> *supportedModes = [[NSMutableArray alloc] init];
+    if ([format isVideoStabilizationModeSupported:AVCaptureVideoStabilizationModeStandard]) {
+      [supportedModes addObject:@"AVCaptureVideoStabilizationModeStandard"];
+    }
+    if ([format isVideoStabilizationModeSupported:AVCaptureVideoStabilizationModeCinematic]) {
+      [supportedModes addObject:@"AVCaptureVideoStabilizationModeCinematic"];
+    }
+
+    if ([format isVideoStabilizationModeSupported:AVCaptureVideoStabilizationModeCinematicExtended]) {
+      [supportedModes addObject:@"AVCaptureVideoStabilizationModeCinematicExtended"];
+    }
+
+    if ([format isVideoStabilizationModeSupported:AVCaptureVideoStabilizationModeCinematicExtendedEnhanced]) {
+      [supportedModes addObject:@"AVCaptureVideoStabilizationModeCinematicExtendedEnhanced"];
+    }
+
+    NSLog(@"🎯 Stabilization: format %d:%d supported modes %@", CMVideoFormatDescriptionGetDimensions(format.formatDescription).width, CMVideoFormatDescriptionGetDimensions(format.formatDescription).height, supportedModes);
+    
+    NSLog(@"🎯 Stabilization: format %@", format);
+
+    NSLog(@"🎯 Stabilization: format frame rate %@", format.videoSupportedFrameRateRanges);
     [qualities addObject:
        [PreviewSize makeWithWidth:[NSNumber numberWithDouble:CMVideoFormatDescriptionGetDimensions(format.formatDescription).width] height:[NSNumber numberWithDouble:CMVideoFormatDescriptionGetDimensions(format.formatDescription).height]]
-    ];
+    ];*/
+    if ([format isVideoStabilizationModeSupported:AVCaptureVideoStabilizationModeStandard]) {
+      [qualities addObject:
+        [PreviewSize makeWithWidth:[NSNumber numberWithDouble:CMVideoFormatDescriptionGetDimensions(format.formatDescription).width] height:[NSNumber numberWithDouble:CMVideoFormatDescriptionGetDimensions(format.formatDescription).height]]
+      ];
+    }
   }
-  return qualities;
+  NSEnumerator *reverseEnumerator = [qualities reverseObjectEnumerator];
+  NSArray *reversedArray = [reverseEnumerator allObjects];
+  return reversedArray;
 }
 
 @end

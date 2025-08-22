@@ -39,7 +39,9 @@ AVCaptureAudioDataOutputSampleBufferDelegate>
 @property(readonly, nonatomic) AVCaptureDevice *captureDevice;
 @property(readonly, nonatomic) AVCaptureInput *captureVideoInput;
 @property(readonly, nonatomic) AVCaptureConnection *captureConnection;
+@property(readonly, nonatomic) AVCaptureConnection *recordingConnection;
 @property(readonly, nonatomic) AVCaptureVideoDataOutput *captureVideoOutput;
+@property(readonly, nonatomic) AVCaptureVideoDataOutput *recordingVideoOutput;
 @property(readonly, nonatomic) AVCaptureVideoPreviewLayer *previewLayer;
 @property(readonly, nonatomic) AVCapturePhotoOutput *capturePhotoOutput;
 
@@ -104,6 +106,9 @@ AVCaptureAudioDataOutputSampleBufferDelegate>
 - (CGSize)getEffectivPreviewSize;
 - (void)setUpCaptureSessionForAudioError:(nonnull void (^)(NSError *))error;
 - (void)setBrightness:(NSNumber *)brightness error:(FlutterError * _Nullable __autoreleasing * _Nonnull)error;
+- (void)setMirrorFrontCamera:(bool)value error:(FlutterError * _Nullable __autoreleasing * _Nonnull)error;
+- (void)configureRecordingConnection;
+- (CGPoint)convertToAppleCoordinateSystem:(CGPoint)flutterPosition;
 @end
 
 NS_ASSUME_NONNULL_END

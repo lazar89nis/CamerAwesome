@@ -42,11 +42,34 @@
   [_captureVideoOutput setSampleBufferDelegate:self queue:dispatch_get_main_queue()];
   [_captureSession addOutputWithNoConnections:_captureVideoOutput];
   
+  // Create separate recording video output for stabilized recording
+  // This approach keeps preview and recording completely separate:
+  // - Preview output: No stabilization, smooth performance
+  // - Recording output: With stabilization, high-quality output
+  _recordingVideoOutput = [AVCaptureVideoDataOutput new];
+  _recordingVideoOutput.videoSettings = @{(NSString*)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+  [_recordingVideoOutput setAlwaysDiscardsLateVideoFrames:YES];
+  [_captureSession addOutputWithNoConnections:_recordingVideoOutput];
+  
   [self initCameraPreview:sensor];
+  
+  // Create separate recording connection with stabilization
+  _recordingConnection = [AVCaptureConnection connectionWithInputPorts:_captureVideoInput.ports
+                                                               output:_recordingVideoOutput];
+  [self configureRecordingConnection];
   
   [_captureConnection setAutomaticallyAdjustsVideoMirroring:NO];
   if (mirrorFrontCamera && [_captureConnection isVideoMirroringSupported]) {
     [_captureConnection setVideoMirrored:mirrorFrontCamera];
+  }
+    [_recordingConnection setAutomaticallyAdjustsVideoMirroring:NO];
+  if (_recordingConnection && [_recordingConnection isVideoMirroringSupported]) {
+    [_recordingConnection setVideoMirrored:(_cameraSensorPosition == PigeonSensorPositionFront)];
+  }
+  
+  // Add recording connection to session
+  if (_recordingConnection) {
+    [_captureSession addConnection:_recordingConnection];
   }
   
   _captureMode = captureMode;
@@ -72,6 +95,8 @@
   }
   
   [self setBestPreviewQuality];
+
+  [self configureStabilization];
   
   return self;
 }
@@ -152,7 +177,8 @@
   //  } else {
   //    NSLog(@"Failed to set frame duration");
   //  }
-  
+
+
   // Attaching to session
   [_captureSession addInputWithNoConnections:_captureVideoInput];
   [_captureSession addConnection:_captureConnection];
@@ -166,6 +192,25 @@
   [_captureConnection setAutomaticallyAdjustsVideoMirroring:NO];
   [_captureConnection setVideoMirrored:(_cameraSensorPosition == PigeonSensorPositionFront)];
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
+}
+
+/// Ensure recording connection is properly configured with stabilization
+- (void)configureRecordingConnection {
+  
+  [_recordingConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
+  if (_recordingConnection && [_recordingConnection isVideoMirroringSupported]) {
+    [_recordingConnection setVideoMirrored:(_cameraSensorPosition == PigeonSensorPositionFront)];
+  }
+  [_recordingConnection setAutomaticallyAdjustsVideoMirroring:NO];
+}
+
+- (void)configureStabilization {
+  if (_recordingConnection && [_recordingConnection isVideoStabilizationSupported]) {
+    NSLog(@"🎯 Stabilization: IS SUPPORTED");
+    [_recordingConnection setPreferredVideoStabilizationMode:AVCaptureVideoStabilizationModeStandard];
+  } else {
+    NSLog(@"🎯 Stabilization: IS NOT SUPPORTED");
+  }
 }
 
 - (void)dealloc {
@@ -310,14 +355,36 @@
   [_captureSession removeOutput:_capturePhotoOutput];
   [_captureSession removeConnection:_captureConnection];
   
+  if (_recordingVideoOutput) {
+    [_captureSession removeOutput:_recordingVideoOutput];
+  }
+  if (_recordingConnection) {
+    [_captureSession removeConnection:_recordingConnection];
+  }
+  
   _cameraSensorPosition = sensor.position;
   _captureDeviceId = sensor.deviceId;
   
   // Init the camera preview with the selected sensor
   [self initCameraPreview:sensor.position];
   
+  // Recreate recording video output and connection with stabilization for new sensor
+  _recordingVideoOutput = [AVCaptureVideoDataOutput new];
+  _recordingVideoOutput.videoSettings = @{(NSString*)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+  [_recordingVideoOutput setAlwaysDiscardsLateVideoFrames:YES];
+  [_captureSession addOutputWithNoConnections:_recordingVideoOutput];
+  
+  _recordingConnection = [AVCaptureConnection connectionWithInputPorts:_captureVideoInput.ports
+                                                               output:_recordingVideoOutput];
+  [self configureRecordingConnection];
+  
+  // Add recording connection to session
+  [_captureSession addConnection:_recordingConnection];
+  
   [self setBestPreviewQuality];
   
+  [self configureStabilization];
+
   [_captureSession commitConfiguration];
   if (sessionIsRunning) {
     dispatch_async(_dispatchQueue, ^{
@@ -366,6 +433,10 @@
   
   if ([_captureConnection isVideoMirroringSupported]) {
       [_captureConnection setVideoMirrored:value];
+  }
+  
+  if (_recordingConnection && [_recordingConnection isVideoMirroringSupported]) {
+      [_recordingConnection setVideoMirrored:value];
   }
 }
 
@@ -416,21 +487,51 @@
 
 /// Trigger focus on device at the specific point of the preview
 - (void)focusOnPoint:(CGPoint)position preview:(CGSize)preview error:(FlutterError * _Nullable __autoreleasing * _Nonnull)error {
+  // Convert Flutter coordinates to Apple's coordinate system
+  CGPoint applePosition = [self convertToAppleCoordinateSystem:position];
+  
   NSError *lockError;
   if ([_captureDevice isFocusModeSupported:AVCaptureFocusModeAutoFocus] && [_captureDevice isFocusPointOfInterestSupported]) {
     if ([_captureDevice lockForConfiguration:&lockError]) {
       if (lockError != nil) {
+        NSLog(@"🎯 Focus: ❌ Failed to lock device for configuration: %@", lockError.localizedDescription);
         *error = [FlutterError errorWithCode:@"FOCUS_ERROR" message:@"impossible to set focus point" details:@""];
         return;
       }
       
-      [_captureDevice setFocusPointOfInterest:position];
+      NSLog(@"🎯 Focus: Setting focus point to Apple coordinates: %@", NSStringFromCGPoint(applePosition));
+      [_captureDevice setFocusPointOfInterest:applePosition];
       [_captureDevice setFocusMode:AVCaptureFocusModeContinuousAutoFocus];
       
       [_captureDevice unlockForConfiguration];
+      NSLog(@"🎯 Focus: ✅ Focus point set successfully");
+    } else {
+      NSLog(@"🎯 Focus: ❌ Failed to lock device for configuration");
+      *error = [FlutterError errorWithCode:@"FOCUS_ERROR" message:@"impossible to set focus point" details:@""];
     }
+  } else {
+    NSLog(@"🎯 Focus: ❌ Device doesn't support focus point of interest or auto focus");
+    *error = [FlutterError errorWithCode:@"FOCUS_ERROR" message:@"device doesn't support focus point of interest" details:@""];
   }
 }
+
+/// Convert Flutter coordinates to Apple's coordinate system for focus
+/// Apple's coordinate system is always relative to landscape orientation with home button on the right
+/// Since app is locked to portrait, treat device as rotated 90 degrees
+/// {0,0} is top-left, {1,1} is bottom-right, regardless of device orientation
+- (CGPoint)convertToAppleCoordinateSystem:(CGPoint)flutterPosition {
+  // For portrait-locked apps, treat device as rotated 90 degrees
+  // This means we need to swap x and y coordinates and flip the y-axis
+  
+  // Flutter: {0,0} = top-left, {1,1} = bottom-right (portrait)
+  // Apple: {0,0} = top-left, {1,1} = bottom-right (landscape with home button on right)
+  // Conversion: {x, y} -> {y, 1-x}
+  
+  CGPoint applePosition = CGPointMake(flutterPosition.y, 1.0 - flutterPosition.x);
+  
+  return applePosition;
+}
+
 
 - (void)receivedImageFromStream {
   [self.imageStreamController receivedImageFromStream];
@@ -519,6 +620,8 @@
 /// Record video into the given path
 - (void)recordVideoAtPath:(NSString *)path completion:(nonnull void (^)(FlutterError * _Nullable))completion {
   if (!_videoController.isRecording) {
+    // Use recording output for video recording (with stabilization)
+    // Preview output remains unchanged and unaffected
     [_videoController recordVideoAtPath:path captureDevice:_captureDevice orientation:_motionController.deviceOrientation audioSetupCallback:^{
       [self setUpCaptureSessionForAudioError:^(NSError *error) {
         completion([FlutterError errorWithCode:@"VIDEO_ERROR" message:@"error when trying to setup audio" details:[error localizedDescription]]);
@@ -527,7 +630,8 @@
       if (self->_videoController.isAudioEnabled) {
         [self->_audioOutput setSampleBufferDelegate:self queue:self->_dispatchQueue];
       }
-      [self->_captureVideoOutput setSampleBufferDelegate:self queue:self->_dispatchQueue];
+      // Set delegate for recording output to start receiving video frames
+      [self->_recordingVideoOutput setSampleBufferDelegate:self queue:self->_dispatchQueue];
       
       completion(nil);
     } options:_videoOptions quality: _recordingQuality completion:completion];
@@ -549,7 +653,14 @@
 /// Stop recording video
 - (void)stopRecordingVideo:(nonnull void (^)(NSNumber * _Nullable, FlutterError * _Nullable))completion {
   if (_videoController.isRecording) {
-    [_videoController stopRecordingVideo:completion];
+    [_videoController stopRecordingVideo:^(NSNumber * _Nullable result, FlutterError * _Nullable error) {
+      // Remove delegate from recording output to stop receiving video frames
+      [self->_recordingVideoOutput setSampleBufferDelegate:nil queue:nil];
+      
+      // No need to switch connections - preview remains unaffected
+      // Recording output is separate and doesn't impact preview performance
+      completion(result, error);
+    }];
   } else {
     completion(@(NO), [FlutterError errorWithCode:@"VIDEO_ERROR" message:@"video is not recording" details:@""]);
   }
@@ -621,6 +732,7 @@
 
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
   if (output == _captureVideoOutput) {
+    // Preview output - update preview texture and image stream
     [self.previewTexture updateBuffer:sampleBuffer];
     if (_onPreviewFrameAvailable) {
       _onPreviewFrameAvailable();
@@ -630,13 +742,10 @@
     if (_imageStreamController.streamImages) {
         [_imageStreamController captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection orientation:_motionController.deviceOrientation];
     }
-
-    // Send to video recording controller if recording
+  } else if (output == _recordingVideoOutput) {
+    // Recording output - send to video recording controller if recording
     if (_videoController.isRecording) {
-      // Ensure VideoController's captureOutput can handle being called multiple times for the same timestamp (once for video, once for audio)
-      // or ensure it only processes the video buffer here.
-      // Assuming it can differentiate based on 'output' or buffer type.
-      [_videoController captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection captureVideoOutput:_captureVideoOutput];
+      [_videoController captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection captureVideoOutput:_recordingVideoOutput];
     }
   } else if (output == _audioOutput) {
     // Send audio buffers only to video recording controller if recording & audio enabled
